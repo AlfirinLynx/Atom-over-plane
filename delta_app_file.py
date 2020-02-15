@@ -3,14 +3,10 @@ import matplotlib.pyplot as plt
 from scipy.integrate import ode, odeint
 from scipy import interpolate
 
-
-from sympy.physics.wigner import wigner_3j
-from sympy import integrate as sint
-from sympy import Symbol, legendre
 from scipy.special import eval_legendre, factorial, factorial2
 
 import mpmath as mp
-mp.mp.dps = 30
+mp.mp.dps = 300
 mp.mp.pretty = True
 
 
@@ -18,18 +14,16 @@ mp.mp.pretty = True
 met5 = 'dopri5'
 met8 = 'dop853'
 
+#Гармоники и относ. ошибка
+N = 2
+NP = 2
 
 
 #Условие - лямбда на стенке
-lam = 0.8
-
-#Шаг по координате
-s1 = 0.0001
-s2 = 0.01
-s3 = 0.01
+lam = -0.3
 
 #Расстояние от стенки
-h = 2.37
+h = 0.308
 
 
 #Параметры дельта-потенциала
@@ -45,58 +39,50 @@ rf = 10.0 * a
 
 #Отступ в нуле
 r0 = 0.0001
-#Первый интервал, 0т 0 до d
-rar1 = np.linspace(r0, d, int((d-r0)/s1), dtype='float64')
-
-#Второй интервал, от d до a
-rar2 = np.linspace(d, a, int(h/s2), dtype='float64')
-
-#Третий интервал, от a до inf
-rar3 = np.linspace(a, rf, int((rf-a)/s3), dtype='float64')
-
-#Массив от d до inf
-rar23 = np.append(rar2[:-1], rar3)
-
-#Массив d/r
-drar = d/rar23
-drari = np.fliplr([drar])[0] #инвертированный
 
 
+#Чтение файлов
 
-# up to 2*N harmonics(all even), ind[l] = l - (n-k)
-N = 2  #число гармоник 2*N
+def ReadF(name, ar):
+    with open(name, 'r') as f:
+        for n in range(N+1):
+            for k in range(n+1):
+                words = f.readline().split()
+                for l in range(len(words)//2):
+                   # p = np.float64(words[2*l])
+                    #q = np.float64(words[2*l+1])
+                    p = mp.mpf(words[2*l])
+                    q = mp.mpf(words[2*l+1])
+                    #print(p, q, "\t", end = "")
+                    ar[n][k][l] = np.float64(p/q)
+               # print("")
 
-#Табулируем 3_j символы
-W = np.array([[[np.float64((wigner_3j(2*n, 2*k, 2*l, 0, 0, 0) ** 2).n(70)) for l in range(n-k, n+k+1)] for k in range(n+1)] for n in range(N+1)])
+NumWigFile = "NumWig%sx%spow%sCppOut.dat" % (N, N, NP)
 
-#Табулируем комбинацию из трех полиномов Лежандра
-#Параметр обрезания бесконечной суммы
-Cl = 160
+HalfWigFile = "HalfWig%sx%spow%sCppOut.dat" % (N, N, NP)
 
-def f(n1, n2, n3):
-    def p(x):
-        return legendre(n1, x) * legendre(n2, x) * legendre(n3, x)
+WigFile = "wig%s.dat" % N
 
-    return p
+NumW = np.array([ [np.int(0) for k in range(n+1)] for n in range(N+1)])
 
-x = Symbol('x', dummy = True)
+cl = 0
+for line in open(NumWigFile):
+    words = line.split()
+    for k in range(len(words)):
+        NumW[cl][k] = np.int(words[k])
+    cl += 1
+        
+        
 
-L = np.array([[[ np.float64(sint(f(2*n, 2*k, 2*l+1)(x), (x, 0, 1)).n(70))  for l in range(Cl+1)] for k in range(n+1)] for n in range(N+1)])
+W = np.array([[[0.0 for l in range(n-k, n+k+1)] for k in range(n+1)] for n in range(N+1)])
+
+L = np.array([[[0.0  for l in range(NumW[n][k] + 1)] for k in range(n+1)] for n in range(N+1)])
+
+ReadF(WigFile, W)
+
+ReadF(HalfWigFile, L)
 
 
-    
-
-print(L)
-
-#print(Nw)
-"""
-F = [] #Interpolation functions for Legendre
-# Legendre l = 2*n +1, n = (l-1)//2
-L = np.zeros((2*N+1, np.size(drari)))
-for n in range(2*N+1):
-	L[n] = eval_legendre(2*n+1, drari)
-	F.append(interpolate.interp1d(drari, L[n]))
-"""
 
 def ak(k):
     if k == 0: return 1
@@ -155,7 +141,8 @@ def k1(n, k, r):
         mx, mn = n, k
     else:
         mx, mn = k, n
-    wa = np.array([wl1(2*l+1,r) for l in range(Cl + 1)])
+    ct = NumW[mx][mn]
+    wa = np.array([wl1(2*l+1,r) for l in range(ct + 1)])
     return (4*k+1)*np.inner(wa, L[mx][mn])
 
 def k2(n, k, r):
@@ -163,7 +150,8 @@ def k2(n, k, r):
         mx, mn = n, k
     else:
         mx, mn = k, n
-    wa = np.array([wl2(2*l+1,r) for l in range(Cl + 1)])
+    ct = NumW[mx][mn]
+    wa = np.array([wl2(2*l+1,r) for l in range(ct + 1)])
     return (4*k+1)*np.inner(wa, L[mx][mn])
 
 
@@ -214,121 +202,6 @@ def coulomb3(r, y, e, u, d):
 ###Начальные условия в нуле, строим N+1 линейно независимых решений
 Nl = N
 
-def shootR(e, u, d):
-    print("Solving...")
-    for k in range(Nl+1):
-        #Начальные условия на первом интервале
-        y0 = np.zeros(2*N+2)
-        y0[k] = np.power(r0, 2*k+1)
-        y0[N+1+k] = (2*k+1)*np.power(r0, 2*k)
-                
-        sol1 = np.zeros((np.size(rar1), 2*N+2))
-        sol1[0] = y0
-                
-        s = ode(coulomb1).set_integrator('dopri5')
-        s.set_initial_value(y0, r0).set_f_params(e, u, d)
-
-        i = 1
-        for r in rar1[1:]:
-            sol1[i] = s.integrate(r)
-            if not  s.successful(): print("error!")
-            print("i = %s, y = %s" % (i, sol1[i][k]))
-            i += 1
-                
-             
-
-        print("Plotting")
-        plt.plot(rar1, sol1[:, k], 'b', label='Solution at 0 < r < d, k=%s' % k)
-        plt.legend(loc='best')
-        plt.xlabel('r')
-        plt.grid()
-        plt.show()
-
-        #Перенормировка
-        norm =np.amax(np.absolute(sol1[-1]))
-        y0  = sol1[-1]/norm
-
-        #Начальные условия на втором интервале
-        sol2 = np.zeros((np.size(rar2), 2*N+2))
-        sol2[0] = y0
-
-        s = ode(coulomb2).set_integrator('dopri5')
-        s.set_initial_value(y0, d).set_f_params(e, u, d)
-
-        i = 1
-        mid = np.size(rar2)//2
-        for r in rar2[1:]:
-            sol2[i] = s.integrate(r)
-            if not  s.successful(): print("error!")
-            print("i = %s, y = %s" % (i, sol2[i][k]))
-            if i == mid: break
-            i += 1
-
-        
-        #Перенормировка
-        norm =np.amax(np.absolute(sol2[mid]))
-        y0  = sol2[mid]/norm
-
-        s = ode(coulomb2).set_integrator('dopri5')
-        s.set_initial_value(y0, rar2[mid]).set_f_params(e, u, d)
-
-        i = mid+1
-        for r in rar2[i:]:
-            sol2[i] = s.integrate(r)
-            if not  s.successful(): print("error!")
-            print("i = %s, y = %s" % (i, sol2[i][k]))
-            i += 1
-        
-
-        print("Plotting")
-        plt.plot(rar2[mid+1:], sol2[mid+1:, k], 'b', label='Solution at d < r < a, k=%s' % k)
-        plt.legend(loc='best')
-        plt.xlabel('r')
-        plt.grid()
-        plt.show()
-
-def shootL(e, u, d):
-    print("Solving...")
-    for k in range(Nl+1):
-        #Начальные условия на бесконечности
-        gam = np.sqrt(-2*e)
-        y0 = np.zeros(2*N+2)
-        y0[k] = np.exp(-gam*rf)
-        y0[N+1+k] =-gam * np.exp(-gam*rf)
-
-        l = np.size(rar3)
-        sol3 = np.zeros((l, 2*N+2))
-        sol3[l-1] = y0
-        
-        s = ode(coulomb3).set_integrator('dopri5')
-        s.set_initial_value(y0, rf).set_f_params(e, u, d)
-
-        mid = 14*l//15
-        print('mid = %s' % mid)
-        for i in range(1, mid+1):
-            sol3[l-1-i] = s.integrate(rar3[l-1-i])
-            if not  s.successful(): print("error!")
-            print("i = %s, y = %s" % (i, sol3[l-1-i][k]))
-
-        #Перенормировка
-        norm =np.amax(np.absolute(sol3[l-1-mid]))
-        y0  = sol3[l-1-mid]/norm
-
-        s = ode(coulomb3).set_integrator('dopri5')
-        s.set_initial_value(y0, rar3[l-1-mid]).set_f_params(e, u, d)
-
-        for i in range(mid+1, l):
-            sol3[l-1-i] = s.integrate(rar3[l-1-i])
-            if not  s.successful(): print("error!")
-            print("i = %s, y = %s" % (i, sol3[l-1-i][k]))
-
-        print("Plotting")
-        plt.plot(rar3[:l-1-mid], sol3[:l-1-mid, k], 'b', label='Solution at a < r < inf, k=%s' % k)
-        plt.legend(loc='best')
-        plt.xlabel('r')
-        plt.grid()
-        plt.show()
-        
 def shootRq(e, u, d, dar, meth = met5):
     print("Solving...")
     mid = (a+d)/2.0
@@ -415,6 +288,8 @@ def shootLq(e, u, d, dar, meth = met5):
         print(y0[k])
 
 
+
+
 def wronsk(e0,e1, st, u, d):
     e = e0
     detar = []
@@ -444,17 +319,4 @@ def wronsk(e0,e1, st, u, d):
 
     
         
-                      
-
-        
-            
-
-        
-        
-
-
-e = -1.5
-wronsk(-0.53, -0.48, 0.005, u, d)
-
-
-
+wronsk(-0.97, -0.8, 0.01, u, d)
